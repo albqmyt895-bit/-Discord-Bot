@@ -1,63 +1,98 @@
 
-import aiosqlite
+import logging
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATABASE_PATH = BASE_DIR / "data" / "bot.db"
+import discord
+from discord.ext import commands
+
+from core.database import Database
 
 
-class Database:
+logger = logging.getLogger("Bot.Core")
+
+
+class BotCore(commands.Bot):
 
     def __init__(self):
-        self.connection = None
-
-    async def connect(self):
-        DATABASE_PATH.parent.mkdir(
-            parents=True,
-            exist_ok=True
+        super().__init__(
+            command_prefix="!",
+            intents=self._get_intents(),
+            help_command=None
         )
 
-        self.connection = await aiosqlite.connect(
-            DATABASE_PATH
-        )
+        self.db = Database()
+        self.base_dir = Path(__file__).resolve().parent.parent
+        self._database_ready = False
 
-        self.connection.row_factory = aiosqlite.Row
+    @staticmethod
+    def _get_intents():
+        intents = discord.Intents.default()
 
-        await self.connection.execute(
-            "PRAGMA foreign_keys = ON"
-        )
+        intents.members = True
+        intents.message_content = True
 
-        await self.connection.execute("""
-            CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id INTEGER PRIMARY KEY,
-                welcome_channel INTEGER,
-                log_channel INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        return intents
+
+    async def setup_hook(self):
+        # Connect to database
+        await self.db.connect()
+        self._database_ready = True
+
+        logger.info("Database connected successfully.")
+
+        # Load all extensions automatically
+        await self.load_extensions()
+
+        logger.info("Bot setup completed.")
+
+    async def load_extensions(self):
+        cogs_dir = self.base_dir / "cogs"
+
+        if not cogs_dir.exists():
+            logger.warning("Cogs directory not found.")
+            return
+
+        extensions = []
+
+        for file in cogs_dir.rglob("*.py"):
+
+            # Ignore private files and folders
+            if file.name.startswith("_"):
+                continue
+
+            relative = file.relative_to(cogs_dir)
+
+            if any(part.startswith("_") for part in relative.parts):
+                continue
+
+            # Convert file path to Python extension
+            relative = file.relative_to(self.base_dir)
+
+            extension = ".".join(
+                relative.with_suffix("").parts
             )
-        """)
 
-        await self.connection.commit()
+            extensions.append(extension)
+
+        # Load extensions
+        for extension in sorted(extensions):
+            try:
+                await self.load_extension(extension)
+                logger.info("Loaded extension: %s", extension)
+
+            except Exception:
+                logger.exception(
+                    "Failed to load extension: %s",
+                    extension
+                )
 
     async def close(self):
-        if self.connection:
-            await self.connection.close()
-            self.connection = None
+        try:
+            if self._database_ready:
+                await self.db.close()
+                self._database_ready = False
 
-    async def execute(self, query, parameters=()):
-        async with self.connection.execute(
-            query, parameters
-        ) as cursor:
-            await self.connection.commit()
-            return cursor.lastrowid
+                logger.info("Database disconnected.")
 
-    async def fetchone(self, query, parameters=()):
-        async with self.connection.execute(
-            query, parameters
-        ) as cursor:
-            return await cursor.fetchone()
-
-    async def fetchall(self, query, parameters=()):
-        async with self.connection.execute(
-            query, parameters
-        ) as cursor:
-            return await cursor.fetchall()
+        finally:
+            await super().close()
