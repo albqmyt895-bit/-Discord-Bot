@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import discord
 from discord.ext import commands
 
+
 logger = logging.getLogger("Bot.Backup")
 
 
@@ -13,6 +14,10 @@ class Backup(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+
+    # =========================
+    # DATABASE
+    # =========================
 
     async def prepare_database(self):
         await self.bot.db.execute("""
@@ -25,14 +30,30 @@ class Backup(commands.Cog):
             )
         """)
 
+    async def get_backup(self, guild_id, backup_id):
+        return await self.bot.db.fetchone(
+            """
+            SELECT * FROM server_backups
+            WHERE guild_id = ? AND id = ?
+            """,
+            (guild_id, backup_id)
+        )
+
+    # =========================
+    # CHANNEL SNAPSHOT
+    # =========================
+
     def get_overwrites(self, channel):
         result = []
 
         for target, overwrite in channel.overwrites.items():
+
             if isinstance(target, discord.Role):
                 target_type = "role"
+
             elif isinstance(target, discord.Member):
                 target_type = "member"
+
             else:
                 continue
 
@@ -49,10 +70,17 @@ class Backup(commands.Cog):
         return result
 
     def snapshot_channel(self, channel):
+
+        channel_type = getattr(
+            channel.type,
+            "name",
+            str(channel.type)
+        )
+
         data = {
             "id": channel.id,
             "name": channel.name,
-            "type": str(channel.type),
+            "type": channel_type,
             "position": channel.position,
             "category_id": (
                 channel.category.id
@@ -66,6 +94,7 @@ class Backup(commands.Cog):
         }
 
         if isinstance(channel, discord.TextChannel):
+
             data.update({
                 "topic": channel.topic,
                 "nsfw": channel.nsfw,
@@ -75,6 +104,7 @@ class Backup(commands.Cog):
             })
 
         elif isinstance(channel, discord.VoiceChannel):
+
             data.update({
                 "bitrate": channel.bitrate,
                 "user_limit": channel.user_limit,
@@ -86,16 +116,24 @@ class Backup(commands.Cog):
 
         return data
 
+    # =========================
+    # PERMISSION RESTORATION
+    # =========================
+
     async def resolve_overwrites(self, guild, saved):
+
         overwrites = {}
 
         for item in saved:
+
             target = None
 
             if item["type"] == "role":
+
                 target = guild.get_role(item["id"])
 
                 if target is None:
+
                     matches = [
                         role for role in guild.roles
                         if role.name == item["name"]
@@ -105,6 +143,7 @@ class Backup(commands.Cog):
                         target = matches[0]
 
             elif item["type"] == "member":
+
                 target = guild.get_member(item["id"])
 
             if target is None:
@@ -115,26 +154,23 @@ class Backup(commands.Cog):
 
             overwrites[target] = (
                 discord.PermissionOverwrite.from_pair(
-                    allow, deny
+                    allow,
+                    deny
                 )
             )
 
         return overwrites
 
-    async def get_backup(self, guild_id, backup_id):
-        return await self.bot.db.fetchone(
-            """
-            SELECT * FROM server_backups
-            WHERE guild_id = ? AND id = ?
-            """,
-            (guild_id, backup_id)
-        )
+    # =========================
+    # CREATE BACKUP
+    # =========================
 
     @commands.command(name="حفظ")
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     @commands.bot_has_guild_permissions(manage_channels=True)
     async def backup(self, ctx):
+
         await self.prepare_database()
 
         guild = ctx.guild
@@ -180,7 +216,7 @@ class Backup(commands.Cog):
         embed = discord.Embed(
             title="تم حفظ السيرفر",
             description=(
-                f"تم إنشاء النسخة الاحتياطية بنجاح.\n"
+                "تم إنشاء النسخة الاحتياطية بنجاح.\n"
                 f"رقم النسخة: `{row['backup_id']}`\n"
                 f"عدد الرومات والتصنيفات: `{len(channels)}`"
             ),
@@ -189,10 +225,15 @@ class Backup(commands.Cog):
 
         await ctx.reply(embed=embed)
 
+    # =========================
+    # LIST BACKUPS
+    # =========================
+
     @commands.command(name="النسخ")
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     async def backups(self, ctx):
+
         await self.prepare_database()
 
         rows = await self.bot.db.fetchall(
@@ -207,7 +248,9 @@ class Backup(commands.Cog):
         )
 
         if not rows:
-            return await ctx.reply("لا توجد نسخ احتياطية.")
+            return await ctx.reply(
+                "لا توجد نسخ احتياطية."
+            )
 
         embed = discord.Embed(
             title="النسخ الاحتياطية",
@@ -215,6 +258,7 @@ class Backup(commands.Cog):
         )
 
         for row in rows:
+
             data = json.loads(row["backup_data"])
 
             embed.add_field(
@@ -229,18 +273,26 @@ class Backup(commands.Cog):
 
         await ctx.reply(embed=embed)
 
+    # =========================
+    # BACKUP INFORMATION
+    # =========================
+
     @commands.command(name="معلومات")
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     async def backup_info(self, ctx, backup_id: int):
+
         await self.prepare_database()
 
         row = await self.get_backup(
-            ctx.guild.id, backup_id
+            ctx.guild.id,
+            backup_id
         )
 
         if not row:
-            return await ctx.reply("النسخة غير موجودة.")
+            return await ctx.reply(
+                "النسخة غير موجودة."
+            )
 
         data = json.loads(row["backup_data"])
 
@@ -269,19 +321,27 @@ class Backup(commands.Cog):
 
         await ctx.reply(embed=embed)
 
+    # =========================
+    # RESTORE BACKUP
+    # =========================
+
     @commands.command(name="استعادة")
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     @commands.bot_has_guild_permissions(manage_channels=True)
     async def restore(self, ctx, backup_id: int):
+
         await self.prepare_database()
 
         row = await self.get_backup(
-            ctx.guild.id, backup_id
+            ctx.guild.id,
+            backup_id
         )
 
         if not row:
-            return await ctx.reply("النسخة غير موجودة.")
+            return await ctx.reply(
+                "النسخة غير موجودة."
+            )
 
         data = json.loads(row["backup_data"])
 
@@ -290,10 +350,10 @@ class Backup(commands.Cog):
                 "إصدار النسخة غير مدعوم."
             )
 
-        confirm = await ctx.reply(
+        await ctx.reply(
             f"سيتم استعادة العناصر الناقصة من النسخة "
             f"`{backup_id}`.\n"
-            "لن يتم حذف الرومات الموجودة.\n"
+            "لن يتم حذف الرومات الموجودة أو تعديلها.\n"
             "اكتب `تأكيد` خلال 30 ثانية للمتابعة."
         )
 
@@ -305,13 +365,18 @@ class Backup(commands.Cog):
             )
 
         try:
+
             await self.bot.wait_for(
                 "message",
                 timeout=30,
                 check=check
             )
+
         except TimeoutError:
-            return await ctx.reply("انتهت مهلة التأكيد.")
+
+            return await ctx.reply(
+                "انتهت مهلة التأكيد."
+            )
 
         guild = ctx.guild
         saved_channels = data["channels"]
@@ -322,7 +387,8 @@ class Backup(commands.Cog):
 
         category_map = {}
 
-        # Match existing categories or restore missing ones.
+        # Restore categories first
+
         categories = [
             item for item in saved_channels
             if item["type"] == "category"
@@ -332,19 +398,23 @@ class Backup(commands.Cog):
             categories,
             key=lambda x: x["position"]
         ):
+
             existing = discord.utils.get(
                 guild.categories,
                 name=item["name"]
             )
 
             if existing:
+
                 category_map[item["id"]] = existing
                 skipped += 1
                 continue
 
             try:
+
                 overwrites = await self.resolve_overwrites(
-                    guild, item["overwrites"]
+                    guild,
+                    item["overwrites"]
                 )
 
                 category = await guild.create_category(
@@ -360,26 +430,39 @@ class Backup(commands.Cog):
                 category_map[item["id"]] = category
                 restored += 1
 
-            except discord.HTTPException:
+            except (discord.HTTPException, TypeError, ValueError):
+
                 logger.exception(
                     "Could not restore category %s",
                     item["name"]
                 )
+
                 failed += 1
 
-        # Restore supported text and voice channels.
+        # Restore text and voice channels
+
+        supported_types = {
+            "text": discord.ChannelType.text,
+            "news": discord.ChannelType.news,
+            "voice": discord.ChannelType.voice
+        }
+
         for item in sorted(
             saved_channels,
             key=lambda x: x["position"]
         ):
+
             channel_type = item["type"]
 
             if channel_type == "category":
                 continue
 
-            if channel_type not in (
-                "text", "news", "voice"
-            ):
+            expected_type = supported_types.get(
+                channel_type
+            )
+
+            if expected_type is None:
+
                 skipped += 1
                 continue
 
@@ -388,20 +471,28 @@ class Backup(commands.Cog):
             )
 
             if category is None and item.get("category_name"):
+
                 category = discord.utils.get(
                     guild.categories,
                     name=item["category_name"]
                 )
 
+            # Check whether the channel already exists
+
             existing = None
 
             for channel in guild.channels:
+
+                current_type = getattr(
+                    channel.type,
+                    "name",
+                    str(channel.type)
+                )
+
                 if channel.name != item["name"]:
                     continue
 
-                if channel.type != discord.ChannelType(
-                    channel_type
-                ):
+                if channel.type != expected_type:
                     continue
 
                 existing_category = (
@@ -412,16 +503,20 @@ class Backup(commands.Cog):
                 if existing_category == item.get(
                     "category_name"
                 ):
+
                     existing = channel
                     break
 
             if existing:
+
                 skipped += 1
                 continue
 
             try:
+
                 overwrites = await self.resolve_overwrites(
-                    guild, item["overwrites"]
+                    guild,
+                    item["overwrites"]
                 )
 
                 common = {
@@ -432,15 +527,20 @@ class Backup(commands.Cog):
                 }
 
                 if channel_type in ("text", "news"):
+
                     channel = await guild.create_text_channel(
                         **common,
                         topic=item.get("topic"),
                         nsfw=item.get("nsfw", False),
                         slowmode_delay=item.get("slowmode", 0),
-                        news=(channel_type == "news")
+                        news=(channel_type == "news"),
+                        default_auto_archive_duration=item.get(
+                            "default_auto_archive_duration", 1440
+                        )
                     )
 
-                else:
+                elif channel_type == "voice":
+
                     channel = await guild.create_voice_channel(
                         **common,
                         bitrate=item.get("bitrate", 64000),
@@ -453,12 +553,16 @@ class Backup(commands.Cog):
 
                 restored += 1
 
-            except discord.HTTPException:
+            except (discord.HTTPException, TypeError, ValueError):
+
                 logger.exception(
                     "Could not restore channel %s",
                     item["name"]
                 )
+
                 failed += 1
+
+        # Restoration report
 
         embed = discord.Embed(
             title="تقرير الاستعادة",
@@ -485,18 +589,26 @@ class Backup(commands.Cog):
 
         await ctx.reply(embed=embed)
 
+    # =========================
+    # DELETE BACKUP
+    # =========================
+
     @commands.command(name="حذف_نسخة")
     @commands.guild_only()
     @commands.has_guild_permissions(administrator=True)
     async def delete_backup(self, ctx, backup_id: int):
+
         await self.prepare_database()
 
         row = await self.get_backup(
-            ctx.guild.id, backup_id
+            ctx.guild.id,
+            backup_id
         )
 
         if not row:
-            return await ctx.reply("النسخة غير موجودة.")
+            return await ctx.reply(
+                "النسخة غير موجودة."
+            )
 
         await self.bot.db.execute(
             """
@@ -510,35 +622,52 @@ class Backup(commands.Cog):
             f"تم حذف النسخة رقم `{backup_id}`."
         )
 
+    # =========================
+    # ERROR HANDLING
+    # =========================
+
     @backup.error
     @backups.error
     @backup_info.error
     @restore.error
     @delete_backup.error
     async def command_error(self, ctx, error):
+
         if isinstance(error, commands.MissingPermissions):
+
             await ctx.reply(
                 "هذا الأمر مخصص لمسؤولي السيرفر."
             )
 
         elif isinstance(error, commands.BotMissingPermissions):
+
             await ctx.reply(
                 "البوت لا يمتلك الصلاحيات المطلوبة."
             )
 
         elif isinstance(error, commands.MissingRequiredArgument):
+
             await ctx.reply(
                 "يرجى كتابة رقم النسخة المطلوبة."
             )
 
         elif isinstance(error, commands.BadArgument):
-            await ctx.reply("رقم النسخة غير صحيح.")
+
+            await ctx.reply(
+                "رقم النسخة غير صحيح."
+            )
 
         else:
-            logger.exception(
+
+            logger.error(
                 "Backup command error",
-                exc_info=error
+                exc_info=(
+                    type(error),
+                    error,
+                    error.__traceback__
+                )
             )
+
             await ctx.reply(
                 "حدث خطأ أثناء تنفيذ الأمر."
             )
